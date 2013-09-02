@@ -82,14 +82,14 @@ function Copy-GPOEx {
 	
 	$gpoPath = Join-Path $backup.BackupDirectory $backup.Id.ToString("B");		
 	if (![string]::IsNullOrEmpty($configFile)) {	
-		$variables = ((Get-Content $configFile -ErrorAction Stop)  -join "`n" | ConvertFrom-StringData)
+		$variables = ((Get-Content $configFile -ErrorAction Stop)  -join "`n" -replace "\\", "\\" | ConvertFrom-StringData)
 		Migrate-GPO -GpoPath $gpoPath -Variables $variables -ErrorAction Stop
 	}
 	
 	$operation = { param($backup, $targetPolicy, $targetDomain, $targetServer); Import-Module GroupPolicy;  Import-GPO -BackupId $backup.Id.ToString("B") -TargetName $targetPolicy -Domain $targetDomain -CreateIfNeeded -Path $backup.BackupDirectory -Server $targetServer -ErrorAction Stop }
 	if ($targetCredential -ne $null) 
 	{
-		Invoke-Command -ComputerName $Env:COMPUTERNAME -ScriptBlock $operation -Credential $targetCredential -Authentication CredSSP -ArgumentList $backup, $targetPolicy, $targetDomain, $targetServer -ErrorAction Stop
+		Invoke-Command -ComputerName $Env:COMPUTERNAME -ScriptBlock $operation -Credential $targetCredential -Authentication CredSSP -ArgumentList $backup, $targetPolicy, $targetDomain, $targetServer -ErrorAction Stop 
 	} else {
 		&$operation $backup $targetPolicy $targetDomain $targetServer;
 	}		
