@@ -114,7 +114,7 @@ function Migrate-File {
 	        if ($_GPO_CUSTOM_ACTIONS.ContainsKey($file)) { 
                @($_GPO_CUSTOM_ACTIONS[$file]) | ForEach-Object { $content = ($content | &$_)  }
             }
-	        $content | Set-Content -Path $path
+	        $content | Set-Content -Path $path -Encoding $encoding
 	
 	        if ($wasReadOnly) { $fileInfo.IsReadOnly = $true; }	
         }
