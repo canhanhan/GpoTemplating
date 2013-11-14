@@ -116,7 +116,7 @@ function Migrate-File {
                @($_GPO_CUSTOM_ACTIONS[$file]) | ForEach-Object { $content = ($content | &$_)  }
             }
 						
-			[IO.File]::WriteAllLines($path, $content, $encoding)
+			[IO.File]::WriteAllText($path, $content, $encoding)
 
 	        if ($wasReadOnly) { $fileInfo.IsReadOnly = $true; }	
         }
@@ -274,7 +274,7 @@ function Migrate-GPO {
 	Migrate-Registry -Path (Join-Path (Join-Path $gpoPath $_GPO_PATH_USER) $_GPO_REGISTRY_FILE) -Variables $variables
 	
 	$_GPO_FILES.Keys | ForEach-Object {
-		$encoding = [Text.Encoding]::GetEncoding($_)
+		$encoding = New-Object "System.Text.$($_)Encoding"
 		$_GPO_FILES[$_] | ForEach-Object { 	
 			$file = $_
 			($_GPO_PATH_MACHINE, $_GPO_PATH_USER) | ForEach-Object {
@@ -387,7 +387,7 @@ $_GPO_FILES = @{
                  "Microsoft\Windows NT\SecEdit\GptTmpl.inf",
 				 "*.aas"
 			 );
-	"UTF-8" = @("Microsoft\Windows NT\Audit\Audit.csv",
+	"UTF8" = @("Microsoft\Windows NT\Audit\Audit.csv",
 			   "Microsoft\Windows NT\CAP\CAP.inf"
 			 );
 	"ascii"= @("Microsoft\IEAK\branding\zones\seczrsop.inf",
