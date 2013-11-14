@@ -77,7 +77,7 @@ function Migrate-File {
 	param (
         [ValidateNotNullOrEmpty()]
         [Parameter(Mandatory=$true)]  
-		[Microsoft.PowerShell.Commands.FileSystemCmdletProviderEncoding]$Encoding,
+		[Text.Encoding]$Encoding,
 
         [ValidateNotNullOrEmpty()]
         [Parameter(Mandatory=$true)]
@@ -110,12 +110,14 @@ function Migrate-File {
 		        $fileInfo.IsReadOnly = $false;
 	        }
 	
-	        $content = Migrate-Text -Variables $variables -Content (Get-Content -Raw -Path $path -Encoding $encoding)
+	        $content = Migrate-Text -Variables $variables -Content ([IO.File]::ReadAllText($path, $encoding))
+						
 	        if ($_GPO_CUSTOM_ACTIONS.ContainsKey($file)) { 
                @($_GPO_CUSTOM_ACTIONS[$file]) | ForEach-Object { $content = ($content | &$_)  }
             }
-	        $content | Set-Content -Path $path -Encoding $encoding
-	
+						
+			[IO.File]::WriteAllLines($path, $content, $encoding)
+
 	        if ($wasReadOnly) { $fileInfo.IsReadOnly = $true; }	
         }
     }
@@ -272,10 +274,15 @@ function Migrate-GPO {
 	Migrate-Registry -Path (Join-Path (Join-Path $gpoPath $_GPO_PATH_USER) $_GPO_REGISTRY_FILE) -Variables $variables
 	
 	$_GPO_FILES.Keys | ForEach-Object {
-		$encoding = $_
-		$_GPO_FILES[$encoding] | ForEach-Object {
-			Migrate-File -Encoding $encoding -Folder (Join-Path $gpoPath $_GPO_PATH_MACHINE) -File $_ -Variables $variables
-			Migrate-File -Encoding $encoding -Folder (Join-Path $gpoPath $_GPO_PATH_USER) -File $_ -Variables $variables
+		$encoding = [Text.Encoding]::GetEncoding($_)
+		$_GPO_FILES[$_] | ForEach-Object { 	
+			$file = $_
+			($_GPO_PATH_MACHINE, $_GPO_PATH_USER) | ForEach-Object {
+				$folder = $_
+				Get-ChildItem -Path "$gpoPath\\$folder\\$file" -Recurse -File -ErrorAction SilentlyContinue | Select-Object Name, @{Name="Path";Expr={[IO.Path]::GetDirectoryName($_)}} | ForEach-Object {
+					Migrate-File -Encoding $encoding -Folder $_.Path -File $_.Name -Variables $variables
+				}
+			}			
 		}
 	}	
 }
@@ -334,7 +341,12 @@ function Copy-GPOEx {
 		$ConfigFile
 	)
 	
-	$operation = { param($sourcePolicy, $backupPath, $sourceDomain, $sourceServer); Import-Module GroupPolicy; Backup-GPO -Name $sourcePolicy -Path $backupPath -Domain $sourceDomain -Server $sourceServer -ErrorAction Stop }	
+	$operation = { 
+		param($sourcePolicy, $backupPath, $sourceDomain, $sourceServer); 
+		Import-Module GroupPolicy; 
+		Write-Host "Backing up $sourcePolicy" 
+		Backup-GPO -Name $sourcePolicy -Path $backupPath -Domain $sourceDomain -Server $sourceServer -ErrorAction Stop 
+	}	
 	if ($sourceCredential -ne $null) 
 	{
 		$backup = Invoke-Command -ComputerName $Env:COMPUTERNAME -ScriptBlock $operation -Credential $sourceCredential -Authentication CredSSP -ArgumentList $sourcePolicy, $backupPath, $sourceDomain, $sourceServer  -ErrorAction Stop
@@ -344,11 +356,17 @@ function Copy-GPOEx {
 	
 	$gpoPath = Join-Path $backup.BackupDirectory $backup.Id.ToString("B");		
 	if (![string]::IsNullOrEmpty($configFile)) {	
+		Write-Host "Migrating the policy $gpoPath" 
 		$variables = ((Get-Content $configFile -ErrorAction Stop)  -join "`n" -replace "\\", "\\" | ConvertFrom-StringData)
 		Migrate-GPO -Path $gpoPath -Variables $variables -ErrorAction Stop
 	}
 	
-	$operation = { param($backup, $targetPolicy, $targetDomain, $targetServer); Import-Module GroupPolicy;  Import-GPO -BackupId $backup.Id.ToString("B") -TargetName $targetPolicy -Domain $targetDomain -CreateIfNeeded -Path $backup.BackupDirectory -Server $targetServer -ErrorAction Stop }
+	
+	$operation = { param($backup, $targetPolicy, $targetDomain, $targetServer); 
+		Import-Module GroupPolicy;  
+		Write-Host "Restoring $targetPolicy"
+		Import-GPO -BackupId $backup.Id.ToString("B") -TargetName $targetPolicy -Domain $targetDomain -CreateIfNeeded -Path $backup.BackupDirectory -Server $targetServer -ErrorAction Stop 
+	}
 	if ($targetCredential -ne $null) 
 	{
 		Invoke-Command -ComputerName $Env:COMPUTERNAME -ScriptBlock $operation -Credential $targetCredential -Authentication CredSSP -ArgumentList $backup, $targetPolicy, $targetDomain, $targetServer -ErrorAction Stop 
@@ -358,7 +376,6 @@ function Copy-GPOEx {
 }
 
 $_GPO_FILES = @{
-	"UTF8"= @(	"Microsoft\Windows NT\Audit\Audit.csv");
 	"Unicode"= @("Microsoft\IEAK\branding\ratings\ratings.inf",
 				 "Microsoft\IEAK\branding\ratings\ratrsop.inf",
 				 "Microsoft\IEAK\branding\authcode\authcode.inf",
@@ -367,10 +384,16 @@ $_GPO_FILES = @{
 				 "scripts\psscripts.ini",
 				 "Documents & Settings\fdeploy.ini",
 				 "Documents & Settings\fdeploy1.ini",
-                 "Microsoft\Windows NT\SecEdit\GptTmpl.inf");
+                 "Microsoft\Windows NT\SecEdit\GptTmpl.inf",
+				 "*.aas"
+			 );
+	"UTF-8" = @("Microsoft\Windows NT\Audit\Audit.csv",
+			   "Microsoft\Windows NT\CAP\CAP.inf"
+			 );
 	"ascii"= @("Microsoft\IEAK\branding\zones\seczrsop.inf",
 			   "Microsoft\IEAK\branding\zones\seczones.inf",	
-			   "Microsoft\IEAK\install.ins")		 
+			   "Microsoft\IEAK\install.ins"
+			 )		 
 }
 
 $_GPO_CUSTOM_ACTIONS = @{
@@ -387,15 +410,20 @@ $_GPO_CUSTOM_ACTIONS = @{
         {
             $lines = $content -split "`r`n"
             $start = $lines.IndexOf("[Group Membership]")
-            if ($start -eq -1) { return; }
+            if ($start -eq -1) { return $content; }
             $end = $lines[($start+1)..($lines.Length)].IndexOf((@($lines[($start+1)..($lines.Length)] -match "^\[.+") | Select-Object -First 1))
             if ($end -eq -1) { $end = $lines.Length } else { $end += $start }
 
-            $newLines = $lines[$start..$end] | ForEach-Object {
-                if (!$_.StartsWith("*")) { return $_ }
+            $newLines = $lines[($start)..$end] | ForEach-Object {
+                if ([string]::IsNullOrWhiteSpace($_) -or $_.StartsWith("[")) { return $_; }
 
-                $startPos = $_.IndexOf("=");  
-                $groups = $_.Substring($startPos + 1).Trim() -split "," | ForEach-Object {
+                $memberSeperator = $_.IndexOf("__Member")
+                if ($memberSeperator -eq -1) { return $_; }
+                $sourceGroup = $_.Substring(0, $memberSeperator);
+                $isSourceResolved = $sourceGroup.StartsWith("*")
+                $equalsPosition = $_.IndexOf("=")
+                $type = $_.Substring($memberSeperator, $equalsPosition - $memberSeperator)
+                $targetGroups = $_.Substring($equalsPosition + 1).Trim() -split "," | ForEach-Object {
                     if ($_.StartsWith("*") -or [string]::IsNullOrWhiteSpace($_)) { return $_ }
                     $groupSid = Get-GroupSID $_
                     if ($groupSid -ne $null) {
@@ -405,14 +433,21 @@ $_GPO_CUSTOM_ACTIONS = @{
                     }
                 }
 
-                $_.Substring(0, $startPos + 1) + " " + ($groups -join ",")
+                if (!$isSourceResolved) {
+                    $sourceSid = Get-GroupSID $sourceGroup
+                    if ($sourceSid -ne $null) {
+                        $sourceGroup = "*$($sourceSid.SID)"
+                    } 
+                }
+
+                "$($sourceGroup + $type)= $($targetGroups -join ',')"
             }
 
             for($i=0; $i -lt $newLines.Length; $i++) {
                 $lines[$start+$i] = $newLines[$i]
             }
 
-            $lines -join "`n"
+            return $lines -join "`n"
         }
 
         End { Write-Verbose "Translate-SecEditSIDs Function ended"} 
