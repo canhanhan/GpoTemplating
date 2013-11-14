@@ -97,6 +97,8 @@ function Migrate-File {
     Begin { Write-Verbose "$($MyInvocation.MyCommand.Name):: Function started" } 
 	
     Process {
+		Write-Debug "Migrating file $file in folder $folder"
+		
 	    $path = Join-Path $folder $file
         if (!(Test-Path $path)) { return; }
 
@@ -278,9 +280,11 @@ function Migrate-GPO {
 		$_GPO_FILES[$_] | ForEach-Object { 	
 			$file = $_
 			($_GPO_PATH_MACHINE, $_GPO_PATH_USER) | ForEach-Object {
-				$folder = $_
-				Get-ChildItem -Path "$gpoPath\\$folder\\$file" -Recurse -File -ErrorAction SilentlyContinue | Select-Object Name, @{Name="Path";Expr={[IO.Path]::GetDirectoryName($_)}} | ForEach-Object {
-					Migrate-File -Encoding $encoding -Folder $_.Path -File $_.Name -Variables $variables
+				$folderType = $_
+				Get-ChildItem -Path "$gpoPath\$_\$file" -Recurse -File -ErrorAction SilentlyContinue | ForEach-Object {
+					$folder = "$gpoPath\$folderType\"
+					$file = $_.FullName.Substring($folder.Length)					
+					Migrate-File -Encoding $encoding -Folder $folder -File $file -Variables $variables
 				}
 			}			
 		}
@@ -385,7 +389,7 @@ $_GPO_FILES = @{
 				 "Documents & Settings\fdeploy.ini",
 				 "Documents & Settings\fdeploy1.ini",
                  "Microsoft\Windows NT\SecEdit\GptTmpl.inf",
-				 "*.aas"
+				 "Applications\*.aas"
 			 );
 	"UTF8" = @("Microsoft\Windows NT\Audit\Audit.csv",
 			   "Microsoft\Windows NT\CAP\CAP.inf"
