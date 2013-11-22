@@ -100,17 +100,25 @@ function Migrate-File {
 		Write-Debug "Migrating file $file in folder $folder"
 		
 	    $path = Join-Path $folder $file
-        if (!(Test-Path $path)) { return; }
-
+	
         if ($pscmdlet.ShouldProcess($path)) {	
 	        $fileInfo = New-Object System.IO.FileInfo($path)
 	        $wasReadOnly = $false;
+			$wasHidden = $false;
 	
 	        if ($fileInfo.IsReadOnly)
 	        {
+				Write-Verbose "The file was read-only. Removing read-only flag temporarly. ($path)"
 		        $wasReadOnly = $true;
 		        $fileInfo.IsReadOnly = $false;
 	        }
+			
+	        if ($fileInfo.Attributes -match "Hidden")
+	        {
+				Write-Verbose "The file was hidden. Removing hidden attribute temporarly. ($path)"
+		        $wasHidden = $true
+		        $fileInfo.Attributes = $fileInfo.Attributes -bxor [IO.FileAttributes]::Hidden;
+	        }			
 	
 	        $content = Migrate-Text -Variables $variables -Content ([IO.File]::ReadAllText($path, $encoding))
 						
@@ -120,7 +128,15 @@ function Migrate-File {
 						
 			[IO.File]::WriteAllText($path, $content, $encoding)
 
-	        if ($wasReadOnly) { $fileInfo.IsReadOnly = $true; }	
+	        if ($wasReadOnly) { 
+				Write-Verbose "The file was read-only. Adding read-only flag back. ($path)"
+				$fileInfo.IsReadOnly = $true; 
+			}
+
+			if ($wasHidden) { 
+				Write-Verbose "The file was hidden. Adding hidden attribute back. ($path)"
+				$fileInfo.Attributes = $attributes -bxor [IO.FileAttributes]::Hidden;
+			}	
         }
     }
     End { Write-Verbose "$($MyInvocation.MyCommand.Name):: Function ended" } 
@@ -281,9 +297,11 @@ function Migrate-GPO {
 			$file = $_
 			($_GPO_PATH_MACHINE, $_GPO_PATH_USER) | ForEach-Object {
 				$folderType = $_
-				Get-ChildItem -Path "$gpoPath\$_\$file" -Recurse -File -ErrorAction SilentlyContinue | ForEach-Object {
+				Write-Verbose "Searching for: $gpoPath\$_\$file"
+				Get-ChildItem -Path "$gpoPath\$_\$file" -Recurse -File -ErrorAction SilentlyContinue -Force | ForEach-Object {
 					$folder = "$gpoPath\$folderType\"
 					$file = $_.FullName.Substring($folder.Length)					
+					Write-Debug "Migrating file: $folder\$file"
 					Migrate-File -Encoding $encoding -Folder $folder -File $file -Variables $variables
 				}
 			}			
